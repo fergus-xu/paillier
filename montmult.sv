@@ -4,8 +4,8 @@ module montmult #(
     input  logic clk,
     input  logic rst,
     input  logic start,
-    input  logic [WIDTH-1:0] a_bar,     // ¯a: input operand in Montgomery domain
-    input  logic [WIDTH-1:0] b_bar,     // ¯b: input operand in Montgomery domain
+    input  logic [WIDTH-1:0] a,     // ¯a: input operand in Montgomery domain
+    input  logic [WIDTH-1:0] b,     // ¯b: input operand in Montgomery domain
     input  logic [WIDTH-1:0] n,         // n: modulus
     input  logic [WIDTH-1:0] n_prime,   // n′ = -n⁻¹ mod R, R = 2^WIDTH
 
@@ -48,7 +48,7 @@ module montmult #(
                 done <= 0;
                 if (start) begin
                     // Step 1: t := ā · b̄
-                    t <= a_bar * b_bar;
+                    t <= a * b;
                     next_state <= CALC_T;
                 end
             end
