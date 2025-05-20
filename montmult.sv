@@ -1,88 +1,86 @@
 module montmult #(
-    parameter int WIDTH = 1024
+    parameter WIDTH = 8,
+    parameter R_WIDTH = 8
 )(
-    input  logic clk,
-    input  logic rst,
-    input  logic start,
-    input  logic [WIDTH-1:0] a,     // ¯a: input operand in Montgomery domain
-    input  logic [WIDTH-1:0] b,     // ¯b: input operand in Montgomery domain
-    input  logic [WIDTH-1:0] n,         // n: modulus
-    input  logic [WIDTH-1:0] n_prime,   // n′ = -n⁻¹ mod R, R = 2^WIDTH
+    input  logic              clk,
+    input  logic              rst,
+    input  logic              start,
+    input  logic [WIDTH-1:0]  a,
+    input  logic [WIDTH-1:0]  b,
+    input  logic [WIDTH-1:0]  n,
+    input  logic [R_WIDTH-1:0] n_prime,
 
-    output logic [WIDTH-1:0] result,    // output: (ā * b̄ * R⁻¹) mod n
-    output logic done
+    output logic [WIDTH-1:0]  result,
+    output logic              done
 );
-    // Issue with variable widths
-    // Internal variables following MonPro algorithm notation:
-    // Step 1. t := ā · b̄
-    logic [2*WIDTH-1:0] t;
 
-    // Step 2. m := (t * n′) mod R
-    logic [WIDTH-1:0] m;
-
-    // Step 3. u := (t + m · n) / R
-    logic [2*WIDTH-1:0] u;
-
-    // FSM control
-    typedef enum logic [1:0] {
-        IDLE, CALC_T, CALC_U, REDUCE
+    typedef enum logic [2:0] {
+        IDLE,
+        CALC_T,
+        CALC_M,
+        CALC_T_PLUS_MN,
+        DIVIDE_R,
+        FINAL_SUB,
+        DONE
     } state_t;
 
-    state_t state, next_state;
+    state_t state;
 
-    // Sequential state update
+    logic [2*WIDTH-1:0] T, mN;
+    logic [WIDTH-1:0] m, t;
+    logic [WIDTH-1:0] result_reg;
+
     always_ff @(posedge clk or posedge rst) begin
         if (rst) begin
-            state <= IDLE;
-            done  <= 0;
+            state      <= IDLE;
+            done       <= 0;
+            result_reg <= 0;
         end else begin
-            state <= next_state;
+            case (state)
+                IDLE: begin
+                    done <= 0;
+                    if (start) begin
+                        state <= CALC_T;
+                    end
+                end
+
+                CALC_T: begin
+                    T     <= a * b;
+                    state <= CALC_M;
+                end
+
+                CALC_M: begin
+                    m <= {{(WIDTH - R_WIDTH){1'b0}}, {(T * n_prime)}[R_WIDTH-1:0]};
+                    state <= CALC_T_PLUS_MN;
+                end
+
+                CALC_T_PLUS_MN: begin
+                    mN    <= m * n;
+                    state <= DIVIDE_R;
+                end
+
+                DIVIDE_R: begin
+                    t     <= {T+mN}[WIDTH+R_WIDTH-1:R_WIDTH];
+                    state <= FINAL_SUB;
+                end
+
+                FINAL_SUB: begin
+                    if (t >= n)
+                        result_reg <= t - n;
+                    else
+                        result_reg <= t;
+                    state <= DONE;
+                end
+
+                DONE: begin
+                    done  <= 1;
+                    result <= result_reg;
+                    state <= IDLE;
+                end
+
+                default: state <= IDLE;
+            endcase
         end
     end
 
-    // FSM and computation logic
-    always_ff @(posedge clk) begin
-        case (state)
-            // Wait for start pulse
-            IDLE: begin
-                done <= 0;
-                if (start) begin
-                    // Step 1: t := ā · b̄
-                    t <= a * b;
-                    next_state <= CALC_T;
-                end
-            end
-
-            // Compute m and u
-            CALC_T: begin
-                // Step 2: m := (t * n′) mod R
-                // Since R = 2^WIDTH, mod R = truncate to lower WIDTH bits
-                m <= (t[WIDTH-1:0] * n_prime) & {WIDTH{1'b1}};
-
-                // Step 3: u := (t + m * n) / R
-                // Divide by R = 2^WIDTH is implemented as right shift
-                u <= (t + m * n) >> WIDTH;
-
-                next_state <= CALC_U;
-            end
-
-            // Final reduction if u ≥ n
-            CALC_U: begin
-                // Step 4: if u ≥ n then return u − n else return u
-                if (u >= n)
-                    result <= u - n;
-                else
-                    result <= u;
-
-                next_state <= REDUCE;
-            end
-
-            REDUCE: begin
-                done <= 1;
-                next_state <= IDLE;
-            end
-        endcase
-    end
-
 endmodule
-
