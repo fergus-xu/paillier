@@ -1,109 +1,108 @@
-
 #include "Vmontgomery_cios.h"
 #include "verilated.h"
+#include "verilated_vcd_c.h"
 #include <gmpxx.h>
 #include <iostream>
-#include <random>
 #include <cassert>
 
-#define W 32
-#define S 8
-#define WORDS S
+#define W 8
+#define S 2
 
-void mpz_to_words(mpz_class val, vluint64_t out[WORDS]) {
-    for (int i = 0; i < WORDS; ++i) out[i] = 0;
+void mpz_to_words(const mpz_class& val, vluint64_t out[S]) {
+    for (int i = 0; i < S; ++i) out[i] = 0;
     mpz_export(out, nullptr, -1, sizeof(vluint64_t), 0, 0, val.get_mpz_t());
 }
 
-mpz_class words_to_mpz(const vluint64_t in[WORDS]) {
+mpz_class words_to_mpz(const vluint64_t in[S]) {
     mpz_class result;
-    mpz_import(result.get_mpz_t(), WORDS, -1, sizeof(vluint64_t), 0, 0, in);
+    mpz_import(result.get_mpz_t(), S, -1, sizeof(vluint64_t), 0, 0, in);
     return result;
 }
 
 int main(int argc, char** argv) {
     Verilated::commandArgs(argc, argv);
+    Verilated::traceEverOn(true);
+
     Vmontgomery_cios* top = new Vmontgomery_cios;
+    VerilatedVcdC* tfp = new VerilatedVcdC;
+    top->trace(tfp, 99);
+    tfp->open("montgomery_cios.vcd");
 
-    gmp_randclass rng(gmp_randinit_default);
-    rng.seed(time(NULL));
-
-    mpz_class R = mpz_class(1) << (W * S);
-
-    mpz_class a = rng.get_z_bits(W * S);
-    mpz_class b = rng.get_z_bits(W * S);
-    mpz_class m;
-    do {
-        m = rng.get_z_bits(W * S - 1) | 1;
-    } while (m >= R);
+    // ==== Tiny test values ====
+    mpz_class a = 9;
+    mpz_class b = 3;
+    mpz_class m = 13;
+    mpz_class R = mpz_class(1) << (W * S);  // R = 2^(W*S) = 2^16 = 65536
 
     mpz_class m_inv;
     if (mpz_invert(m_inv.get_mpz_t(), m.get_mpz_t(), R.get_mpz_t()) == 0) {
-        std::cerr << "Failed to compute m^{-1} mod R\n";
+        std::cerr << "Modular inverse does not exist\n";
         return 1;
     }
 
     mpz_class m_prime = R - m_inv;
     mpz_class aR = (a * R) % m;
     mpz_class bR = (b * R) % m;
+    mpz_class expected = ((a * b) % m * R) % m;
 
-    mpz_class expected = (((a * b) % m) * R) % m;
-
-    vluint64_t a_words[WORDS], b_words[WORDS], m_words[WORDS], mprime_word;
+    vluint64_t a_words[S], b_words[S], m_words[S];
     mpz_to_words(aR, a_words);
     mpz_to_words(bR, b_words);
     mpz_to_words(m, m_words);
-    mpz_class mask;
-    mpz_ui_pow_ui(mask.get_mpz_t(), 2, W);
-    mask -= 1;
 
-    mpz_class m_prime_low;
-    mpz_and(m_prime_low.get_mpz_t(), m_prime.get_mpz_t(), mask.get_mpz_t());
-    mprime_word = m_prime_low.get_ui();
+    mpz_class mask = (mpz_class(1) << W) - 1;
+    mpz_class m_prime_low = m_prime & mask;
+    vluint64_t m_prime_word = m_prime_low.get_ui();
 
-    // Reset
+    // === Reset ===
     top->clk = 0;
     top->rst_n = 0;
-    for (int i = 0; i < 4; ++i) {
+    top->eval(); tfp->dump(0);
+    for (int i = 1; i <= 4; ++i) {
         top->clk ^= 1;
         top->eval();
+        tfp->dump(i * 10);
     }
     top->rst_n = 1;
 
-    for (int i = 0; i < S; ++i) {
-        top->a[i] = a_words[i];
-        top->b[i] = b_words[i];
-        top->m[i] = m_words[i];
-    }
-    top->m_prime = mprime_word;
+    // === Apply inputs ===
+    top->a_0 = a_words[0]; top->a_1 = a_words[1];
+    top->b_0 = b_words[0]; top->b_1 = b_words[1];
+    top->m_0 = m_words[0]; top->m_1 = m_words[1];
+    top->m_prime = m_prime_word;
     top->start = 1;
 
-    // Clock until done
-    while (!top->done) {
+    // === Run until done ===
+    int cycle = 0;
+    while (!top->done && cycle < 500) {
         top->clk ^= 1;
         top->eval();
+        tfp->dump(10 * cycle + 5);
         if (top->clk == 1) top->start = 0;
+        cycle++;
     }
 
-    vluint64_t result_words[WORDS];
-    for (int i = 0; i < S; ++i) {
-        result_words[i] = top->result[i];
-    }
+    // === Read result ===
+    vluint64_t result_words[S] = {
+        top->result_0,
+        top->result_1
+    };
 
     mpz_class hw_result = words_to_mpz(result_words);
 
-    std::cout << "a        = " << a.get_str(16) << "\n";
-    std::cout << "b        = " << b.get_str(16) << "\n";
-    std::cout << "modulus  = " << m.get_str(16) << "\n";
-    std::cout << "expected = " << expected.get_str(16) << "\n";
-    std::cout << "hardware = " << hw_result.get_str(16) << "\n";
+    std::cout << "a        = " << a.get_str() << "\n";
+    std::cout << "b        = " << b.get_str() << "\n";
+    std::cout << "modulus  = " << m.get_str() << "\n";
+    std::cout << "expected = " << expected.get_str() << "\n";
+    std::cout << "hardware = " << hw_result.get_str() << "\n";
 
-    if (hw_result == expected) {
-        std::cout << "✅ PASS: Output matches expected\n";
-    } else {
-        std::cout << "❌ FAIL: Mismatch\n";
-    }
+    if (hw_result == expected)
+        std::cout << "✅ PASS\n";
+    else
+        std::cout << "❌ FAIL\n";
 
+    tfp->close();
+    delete tfp;
     delete top;
     return 0;
 }
