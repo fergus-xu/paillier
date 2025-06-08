@@ -1,30 +1,33 @@
 module testbench;
-    parameter int WIDTH    = 32;
-    parameter int R_WIDTH  = 32;
-    parameter int EWIDTH   = 8;
-    parameter int S        = 8;
-    parameter int N        = 3;
+    parameter int WIDTH   = 64;
+    parameter int S       = 16;
+    parameter int N       = 6;
 
-    logic clk, rst, start, done;
-    logic [WIDTH-1:0] base      [S];
-    logic [WIDTH-1:0] n         [S];
-    logic [WIDTH-1:0] mont_one  [S];
-    logic [R_WIDTH-1:0] n_prime;
-    logic [EWIDTH-1:0] exponent;
-    logic [WIDTH-1:0] result    [S];
+    logic clk, rst;
+    logic start, done;
+
+    logic [WIDTH-1:0] a        [S];
+    logic [WIDTH-1:0] b        [S];
+    logic [WIDTH-1:0] n        [S];
+    logic [WIDTH-1:0] mont_one [S];
+    logic [WIDTH-1:0] result   [S];
+    logic [WIDTH-1:0] n_prime;
 
     always #5 clk = ~clk;
 
-    montexp #(.WIDTH(WIDTH), .R_WIDTH(R_WIDTH), .EWIDTH(EWIDTH), .S(S), .N(N)) dut (
+    montcios #(
+        .WIDTH(WIDTH),
+        .S(S),
+        .N(N)
+    ) dut (
         .clk(clk),
         .rst(rst),
-        .start(start),
-        .base(base),
-        .exponent(exponent),
-        .n(n),
-        .n_prime(n_prime),
-        .mont_one(mont_one),
-        .result(result),
+        .mont_start(start),
+        .a(a),
+        .b(b),
+        .p(n),
+        .p_prime(n_prime),
+        .Tout(result),
         .done(done)
     );
 
@@ -37,35 +40,38 @@ module testbench;
         start = 0;
         cycle_count = 0;
 
-        base[0] = 32'd262148;
+        // Initialize test values
+        a[0]        = 32'd262148;   // example value
+        b[0]        = 32'd262148;   // example value
+        n[0]        = 32'd65793;    // modulus
         mont_one[0] = 32'd65537;
-        n[0] = 32'd65793;
-
         for (i = 1; i < S; i++) begin
-            base[i]      = 32'd0;
-            mont_one[i]  = 32'd0;
-            n[i]         = 32'd1;
+            a[i]        = 32'd0;
+            b[i]        = 32'd0;
+            n[i]        = 32'd1;
+            mont_one[i] = 32'd0;
         end
-
         n_prime = 32'd4278190335;
-        exponent = 8'd3;
 
         // Reset
         #20 rst = 0;
 
-        // Start operation
+        // Start multiplication
         #10 start = 1;
         #10 start = 0;
 
-        // Cycle count and monitor
-
+        // Wait and count cycles
         while (!done) begin
             @(posedge clk);
             cycle_count++;
         end
 
-        wait (done);
-        $stop;
+        $display("Montgomery multiplication completed in %0d cycles", cycle_count);
+        $display("Result:");
+        for (i = 0; i < S; i++) begin
+            $display("result[%0d] = %0d", i, result[i]);
+        end
 
+        $stop;
     end
 endmodule
